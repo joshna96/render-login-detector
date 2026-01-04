@@ -1,0 +1,16 @@
+login_id,user_id,country,ip,device,hour,failed_attempts,is_new_device,is_vpn
+1,201,India,117.235.12.11,Mobile,10,0,0,0
+2,202,India,117.87.90.22,Laptop,14,1,0,0
+3,203,India,49.37.22.51,Mobile,21,0,0,0
+4,204,USA,64.21.16.19,Laptop,2,3,0,1
+5,205,Russia,91.201.44.99,Mobile,3,5,1,1
+6,206,India,117.221.33.101,Tablet,9,0,0,0
+7,207,Germany,88.44.19.75,Laptop,23,4,1,1
+8,208,India,49.44.33.51,Mobile,11,0,0,0
+9,209,China,110.56.99.77,Mobile,1,6,1,1
+10,210,UK,81.212.44.150,Laptop,4,2,0,0
+11,211,India,117.93.22.64,Mobile,8,0,0,0
+12,212,USA,64.33.22.15,Tablet,15,0,0,1
+13,213,Russia,91.55.99.203,Laptop,22,7,1,1
+14,214,India,49.28.17.63,Mobile,12,0,0,0
+15,215,France,92.57.44.12,Tablet,3,5,1,1
