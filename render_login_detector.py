@@ -1,97 +1,123 @@
 from flask import Flask, jsonify
-from flask_cors import CORS
 import pandas as pd
 import os
+import kagglehub
 from cryptography.fernet import Fernet
+from sklearn.ensemble import IsolationForest
 
 app = Flask(__name__)
-CORS(app)
 
-DATA_FILE = "login.csv"   # your 5000-row dataset
+# ===================== ENCRYPTION SETUP =====================
 
-# 🔐 Generate / load encryption key
-KEY_FILE = "secret.key"
+# Generate key once (in real systems this is stored securely)
+ENCRYPTION_KEY = Fernet.generate_key()
+cipher = Fernet(ENCRYPTION_KEY)
 
-if not os.path.exists(KEY_FILE):
-    with open(KEY_FILE, "wb") as f:
-        f.write(Fernet.generate_key())
+def encrypt_value(value):
+    return cipher.encrypt(str(value).encode()).decode()
 
-with open(KEY_FILE, "rb") as f:
-    SECRET_KEY = f.read()
+# ===================== LOAD DATASET =====================
 
-cipher = Fernet(SECRET_KEY)
+def load_dataset():
+    path = kagglehub.dataset_download("dasgroup/rba-dataset")
 
+    for file in os.listdir(path):
+        if file.endswith(".csv"):
+            csv_path = os.path.join(path, file)
+            break
 
-def encrypt_data(data: dict):
-    """Encrypt dictionary data"""
-    return cipher.encrypt(str(data).encode()).decode()
+    df = pd.read_csv(csv_path)
 
+    # Show first 2 rows in logs
+    print("FIRST 2 ROWS OF DATASET:")
+    print(df.head(2))
 
-def detect_order_logs():
-    data = pd.read_csv(DATA_FILE)
+    return df
+
+# ===================== ISOLATION FOREST =====================
+
+def run_isolation_forest(df):
+    features = df[[
+        "login_time",
+        "failed_attempts",
+        "is_new_device",
+        "is_vpn"
+    ]]
+
+    model = IsolationForest(
+        n_estimators=100,
+        contamination=0.2,
+        random_state=42
+    )
+
+    df["anomaly_score"] = model.fit_predict(features)
+    # -1 = anomaly, 1 = normal
+    return df
+
+# ===================== DETECTION LOGIC =====================
+
+def detect_logins():
+    df = load_dataset()
+    df = run_isolation_forest(df)
+
     anomalies = []
 
-    for _, row in data.iterrows():
+    for _, row in df.iterrows():
         reasons = []
         actions = []
 
-        # 1. Very high discount
-        if row["discount_percent"] > 40:
-            reasons.append("unusually high discount")
-            actions.append("Verify discount approval")
+        # Rule-based checks
+        if row["login_time"] < 5 or row["login_time"] > 22:
+            reasons.append("unusual login time")
 
-        # 2. High revenue with low rating
-        if row["rating"] < 2.5 and row["total_revenue"] > 1000:
-            reasons.append("high revenue despite low product rating")
-            actions.append("Check for fake reviews or manipulation")
+        if row["failed_attempts"] >= 3:
+            reasons.append("multiple failed login attempts")
+            actions.append("temporary account lock")
 
-        # 3. COD / risky payment for high value
-        if row["payment_method"] == "Cash on Delivery" and row["total_revenue"] > 800:
-            reasons.append("high-value COD order")
-            actions.append("Manual order verification")
+        if row["is_vpn"] == 1:
+            reasons.append("VPN usage detected")
+            actions.append("trigger OTP verification")
 
-        # 4. Price mismatch
-        expected_price = row["price"] * (1 - row["discount_percent"] / 100)
-        if abs(expected_price - row["discounted_price"]) > 1:
-            reasons.append("pricing mismatch detected")
-            actions.append("Audit pricing calculation")
+        if row["is_new_device"] == 1:
+            reasons.append("new device login")
+            actions.append("device verification email")
 
-        # 5. Region-based risk
-        risky_regions = ["Middle East", "Europe"]
-        if row["customer_region"] in risky_regions and row["total_revenue"] > 1200:
-            reasons.append("high-value order from sensitive region")
-            actions.append("Trigger additional verification")
+        if row["country"] != "India":
+            reasons.append("foreign login location")
+
+        # Isolation Forest result
+        if row["anomaly_score"] == -1:
+            reasons.append("ML-based anomaly detected")
 
         if reasons:
-            log = {
-                "order_id": int(row["order_id"]),
-                "product_id": int(row["product_id"]),
-                "category": row["product_category"],
-                "region": row["customer_region"],
-                "payment_method": row["payment_method"],
+            anomalies.append({
+                "user_id": encrypt_value(row["user_id"]),
+                "country": row["country"],
+                "device": row["device_type"],
+                "browser": row["browser"],
                 "reasons": reasons,
-                "actions": actions
-            }
-
-            encrypted_log = encrypt_data(log)
-            anomalies.append(encrypted_log)
+                "recommended_actions": actions
+            })
 
     return {
-        "cloud": "AWS",
-        "metric": "order_logs",
-        "total_logs": len(data),
+        "cloud": "RENDER",
+        "dataset": "Kaggle RBA Dataset",
+        "detection": "Rule-based + Isolation Forest",
+        "encryption": "AES (Fernet)",
+        "total_records": len(df),
         "anomaly_count": len(anomalies),
-        "encrypted_anomalies": anomalies,
-        "alert": len(anomalies) > 3,
-        "risk_score": min(len(anomalies) * 10, 100)
+        "alert": len(anomalies) > 5,
+        "anomalies": anomalies
     }
 
+# ===================== API =====================
 
 @app.route("/result")
 def result():
-    return jsonify(detect_order_logs())
+    return jsonify(detect_logins())
 
+# ===================== START =====================
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5001))
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
