@@ -1,126 +1,97 @@
 from flask import Flask, jsonify
+from flask_cors import CORS
 import pandas as pd
 import os
-from flask import Flask, jsonify
-from flask_cors import CORS   # ✅ ADD THIS
-import pandas as pd
-import os
+from cryptography.fernet import Fernet
 
 app = Flask(__name__)
-CORS(app)   # ✅ THIS FIXES YOUR CORS ERROR
+CORS(app)
+
+DATA_FILE = "login.csv"   # your 5000-row dataset
+
+# 🔐 Generate / load encryption key
+KEY_FILE = "secret.key"
+
+if not os.path.exists(KEY_FILE):
+    with open(KEY_FILE, "wb") as f:
+        f.write(Fernet.generate_key())
+
+with open(KEY_FILE, "rb") as f:
+    SECRET_KEY = f.read()
+
+cipher = Fernet(SECRET_KEY)
 
 
-def detect_logins():
+def encrypt_data(data: dict):
+    """Encrypt dictionary data"""
+    return cipher.encrypt(str(data).encode()).decode()
 
-    data = pd.read_csv("login.csv")
+
+def detect_order_logs():
+    data = pd.read_csv(DATA_FILE)
     anomalies = []
 
     for _, row in data.iterrows():
-
         reasons = []
         actions = []
 
-        if row["hour"] < 5 or row["hour"] > 22:
-            reasons.append("login at unusual time")
-            actions.append("Verify user activity history")
+        # 1. Very high discount
+        if row["discount_percent"] > 40:
+            reasons.append("unusually high discount")
+            actions.append("Verify discount approval")
 
-        if row["failed_attempts"] >= 5:
-            reasons.append("multiple failed login attempts")
-            actions.append("Lock account temporarily")
+        # 2. High revenue with low rating
+        if row["rating"] < 2.5 and row["total_revenue"] > 1000:
+            reasons.append("high revenue despite low product rating")
+            actions.append("Check for fake reviews or manipulation")
 
-        if row["is_vpn"] == 1:
-            reasons.append("login from VPN/proxy")
-            actions.append("Trigger OTP verification")
+        # 3. COD / risky payment for high value
+        if row["payment_method"] == "Cash on Delivery" and row["total_revenue"] > 800:
+            reasons.append("high-value COD order")
+            actions.append("Manual order verification")
 
-        if row["is_new_device"] == 1:
-            reasons.append("new device detected")
-            actions.append("Send device verification email")
+        # 4. Price mismatch
+        expected_price = row["price"] * (1 - row["discount_percent"] / 100)
+        if abs(expected_price - row["discounted_price"]) > 1:
+            reasons.append("pricing mismatch detected")
+            actions.append("Audit pricing calculation")
 
-        risky = ["Russia", "China", "USA", "Germany", "France", "UK"]
-        if row["country"] in risky:
-            reasons.append("foreign login location")
+        # 5. Region-based risk
+        risky_regions = ["Middle East", "Europe"]
+        if row["customer_region"] in risky_regions and row["total_revenue"] > 1200:
+            reasons.append("high-value order from sensitive region")
+            actions.append("Trigger additional verification")
 
         if reasons:
-            anomalies.append({
-                "login_id": int(row["login_id"]),
-                "user_id": int(row["user_id"]),
-                "country": row["country"],
+            log = {
+                "order_id": int(row["order_id"]),
+                "product_id": int(row["product_id"]),
+                "category": row["product_category"],
+                "region": row["customer_region"],
+                "payment_method": row["payment_method"],
                 "reasons": reasons,
-                "recommended_actions": actions
-            })
+                "actions": actions
+            }
+
+            encrypted_log = encrypt_data(log)
+            anomalies.append(encrypted_log)
 
     return {
-        "cloud": "RENDER",
-        "metric": "logins",
+        "cloud": "AWS",
+        "metric": "order_logs",
+        "total_logs": len(data),
         "anomaly_count": len(anomalies),
-        "anomalies": anomalies,
+        "encrypted_anomalies": anomalies,
         "alert": len(anomalies) > 3,
-        "risk_score": min(len(anomalies) * 12, 100)  # ✅ optional but useful for frontend
+        "risk_score": min(len(anomalies) * 10, 100)
     }
 
 
 @app.route("/result")
 def result():
-    return jsonify(detect_logins())
+    return jsonify(detect_order_logs())
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-
-app = Flask(__name__)
-
-def detect_logins():
-
-    data = pd.read_csv("login.csv")
-    anomalies = []
-
-    for _, row in data.iterrows():
-
-        reasons = []
-        actions = []
-
-        if row["hour"] < 5 or row["hour"] > 22:
-            reasons.append("login at unusual time")
-            actions.append("Verify user activity history")
-
-        if row["failed_attempts"] >= 5:
-            reasons.append("multiple failed login attempts")
-            actions.append("Lock account temporarily")
-
-        if row["is_vpn"] == 1:
-            reasons.append("login from VPN/proxy")
-            actions.append("Trigger OTP verification")
-
-        if row["is_new_device"] == 1:
-            reasons.append("new device detected")
-            actions.append("Send device verification email")
-
-        risky = ["Russia", "China", "USA", "Germany", "France", "UK"]
-        if row["country"] in risky:
-            reasons.append("foreign login location")
-
-        if reasons:
-            anomalies.append({
-                "login_id": int(row["login_id"]),
-                "user_id": int(row["user_id"]),
-                "country": row["country"],
-                "reasons": reasons,
-                "recommended_actions": actions
-            })
-
-    return {
-        "cloud": "RENDER",
-        "metric": "logins",
-        "anomaly_count": len(anomalies),
-        "anomalies": anomalies,
-        "alert": len(anomalies) > 3
-    }
-
-@app.route("/result")
-def result():
-    return jsonify(detect_logins())
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 5001))
     app.run(host="0.0.0.0", port=port)
