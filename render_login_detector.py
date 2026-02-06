@@ -1,42 +1,29 @@
 from flask import Flask, jsonify
 import pandas as pd
 import os
-import kagglehub
 from cryptography.fernet import Fernet
 from sklearn.ensemble import IsolationForest
 
 app = Flask(__name__)
 
-# ===================== ENCRYPTION SETUP =====================
-
-# Generate key once (in real systems this is stored securely)
+# ================= ENCRYPTION =================
+# NOTE: In real systems, the key is stored securely (env/secret manager)
 ENCRYPTION_KEY = Fernet.generate_key()
 cipher = Fernet(ENCRYPTION_KEY)
 
 def encrypt_value(value):
     return cipher.encrypt(str(value).encode()).decode()
 
-# ===================== LOAD DATASET =====================
-
-def load_dataset():
-    path = kagglehub.dataset_download("dasgroup/rba-dataset")
-
-    for file in os.listdir(path):
-        if file.endswith(".csv"):
-            csv_path = os.path.join(path, file)
-            break
-
-    df = pd.read_csv(csv_path)
-
-    # Show first 2 rows in logs
-    print("FIRST 2 ROWS OF DATASET:")
+# ================= LOAD DATA =================
+def load_data():
+    # login.csv is already in GitHub repo
+    df = pd.read_csv("login.csv")
+    print("First 2 rows of dataset:")
     print(df.head(2))
-
     return df
 
-# ===================== ISOLATION FOREST =====================
-
-def run_isolation_forest(df):
+# ================= ISOLATION FOREST =================
+def apply_isolation_forest(df):
     features = df[[
         "login_time",
         "failed_attempts",
@@ -50,15 +37,14 @@ def run_isolation_forest(df):
         random_state=42
     )
 
-    df["anomaly_score"] = model.fit_predict(features)
-    # -1 = anomaly, 1 = normal
+    df["ml_anomaly"] = model.fit_predict(features)
+    # -1 → anomaly, 1 → normal
     return df
 
-# ===================== DETECTION LOGIC =====================
-
+# ================= DETECTION LOGIC =================
 def detect_logins():
-    df = load_dataset()
-    df = run_isolation_forest(df)
+    df = load_data()
+    df = apply_isolation_forest(df)
 
     anomalies = []
 
@@ -66,7 +52,7 @@ def detect_logins():
         reasons = []
         actions = []
 
-        # Rule-based checks
+        # Rule-based RBA checks
         if row["login_time"] < 5 or row["login_time"] > 22:
             reasons.append("unusual login time")
 
@@ -75,18 +61,18 @@ def detect_logins():
             actions.append("temporary account lock")
 
         if row["is_vpn"] == 1:
-            reasons.append("VPN usage detected")
+            reasons.append("VPN detected")
             actions.append("trigger OTP verification")
 
         if row["is_new_device"] == 1:
             reasons.append("new device login")
-            actions.append("device verification email")
+            actions.append("send device verification email")
 
         if row["country"] != "India":
             reasons.append("foreign login location")
 
-        # Isolation Forest result
-        if row["anomaly_score"] == -1:
+        # ML-based detection
+        if row["ml_anomaly"] == -1:
             reasons.append("ML-based anomaly detected")
 
         if reasons:
@@ -101,23 +87,20 @@ def detect_logins():
 
     return {
         "cloud": "RENDER",
-        "dataset": "Kaggle RBA Dataset",
-        "detection": "Rule-based + Isolation Forest",
-        "encryption": "AES (Fernet)",
+        "dataset": "Login CSV (GitHub)",
+        "security": "AES Encryption + Isolation Forest",
         "total_records": len(df),
         "anomaly_count": len(anomalies),
         "alert": len(anomalies) > 5,
         "anomalies": anomalies
     }
 
-# ===================== API =====================
-
+# ================= API =================
 @app.route("/result")
 def result():
     return jsonify(detect_logins())
 
-# ===================== START =====================
-
+# ================= START =================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
