@@ -1,4 +1,6 @@
 flask
-pandas
-gunicorn
 flask-cors
+gunicorn
+pandas
+scikit-learn
+cryptography
