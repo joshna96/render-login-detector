@@ -6,8 +6,8 @@ from sklearn.ensemble import IsolationForest
 
 app = Flask(__name__)
 
-# ================= ENCRYPTION =================
-# NOTE: In real systems, the key is stored securely (env/secret manager)
+# ================= AES ENCRYPTION (DATA-LEVEL) =================
+# Used for sensitive fields (session_id)
 ENCRYPTION_KEY = Fernet.generate_key()
 cipher = Fernet(ENCRYPTION_KEY)
 
@@ -16,89 +16,95 @@ def encrypt_value(value):
 
 # ================= LOAD DATA =================
 def load_data():
-    # login.csv is already in GitHub repo
     df = pd.read_csv("login.csv")
-    print("First 2 rows of dataset:")
-    print(df.head(2))
     return df
 
 # ================= ISOLATION FOREST =================
 def apply_isolation_forest(df):
-    features = df[[
-        "login_time",
-        "failed_attempts",
-        "is_new_device",
-        "is_vpn"
-    ]]
+    features = df[
+        [
+            "network_packet_size",
+            "login_attempts",
+            "session_duration",
+            "ip_reputation_score",
+            "failed_logins",
+            "unusual_time_access"
+        ]
+    ]
 
     model = IsolationForest(
         n_estimators=100,
-        contamination=0.2,
+        contamination=0.25,
         random_state=42
     )
 
     df["ml_anomaly"] = model.fit_predict(features)
-    # -1 → anomaly, 1 → normal
+    # -1 = anomaly, 1 = normal
     return df
 
-# ================= DETECTION LOGIC =================
-def detect_logins():
+# ================= RULE + ML DETECTION =================
+def detect_sessions():
     df = load_data()
     df = apply_isolation_forest(df)
 
-    anomalies = []
+    alerts = []
 
     for _, row in df.iterrows():
         reasons = []
         actions = []
 
-        # Rule-based RBA checks
-        if row["login_time"] < 5 or row["login_time"] > 22:
-            reasons.append("unusual login time")
+        # -------- RULE BASED DETECTION --------
+        if row["failed_logins"] >= 3:
+            reasons.append("multiple failed logins")
+            actions.append("temporary session block")
 
-        if row["failed_attempts"] >= 3:
-            reasons.append("multiple failed login attempts")
-            actions.append("temporary account lock")
+        if row["ip_reputation_score"] < 0.4:
+            reasons.append("low IP reputation")
+            actions.append("flag IP for monitoring")
 
-        if row["is_vpn"] == 1:
-            reasons.append("VPN detected")
-            actions.append("trigger OTP verification")
+        if row["unusual_time_access"] == 1:
+            reasons.append("access at unusual time")
+            actions.append("step-up authentication")
 
-        if row["is_new_device"] == 1:
-            reasons.append("new device login")
-            actions.append("send device verification email")
+        if row["network_packet_size"] > 1000:
+            reasons.append("abnormal packet size")
 
-        if row["country"] != "India":
-            reasons.append("foreign login location")
+        if row["protocol_type"] not in ["TCP", "HTTPS"]:
+            reasons.append("suspicious protocol detected")
 
-        # ML-based detection
+        # -------- ML BASED DETECTION --------
         if row["ml_anomaly"] == -1:
             reasons.append("ML-based anomaly detected")
 
+        # -------- FINAL ALERT --------
         if reasons:
-            anomalies.append({
-                "user_id": encrypt_value(row["user_id"]),
-                "country": row["country"],
-                "device": row["device_type"],
-                "browser": row["browser"],
+            alerts.append({
+                "session_id": encrypt_value(row["session_id"]),
+                "browser": row["browser_type"],
+                "encryption_used": row["encryption_used"],
                 "reasons": reasons,
                 "recommended_actions": actions
             })
 
     return {
         "cloud": "RENDER",
-        "dataset": "Login CSV (GitHub)",
-        "security": "AES Encryption + Isolation Forest",
-        "total_records": len(df),
-        "anomaly_count": len(anomalies),
-        "alert": len(anomalies) > 5,
-        "anomalies": anomalies
+        "dataset": "CrossCloud Login Sessions",
+        "encryption_in_transit": "SSH",
+        "encryption_at_data_level": "AES (Fernet)",
+        "detection_methods": [
+            "Rule-Based Analysis",
+            "Isolation Forest"
+        ],
+        "total_sessions": len(df),
+        "detected_attacks": len(alerts),
+        "alert_triggered": len(alerts) > 3,
+        "alerts": alerts
     }
 
 # ================= API =================
-@app.route("/result")
+@app.route("/result", methods=["GET"])
 def result():
-    return jsonify(detect_logins())
+    return jsonify(detect_sessions())
 
 # ================= START =================
 if __name__ == "__main__":
