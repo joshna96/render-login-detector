@@ -1,6 +1,5 @@
-flask
-pandas
-gunicorn
-kagglehub
-scikit-learn
-cryptography
+Flask==3.0.0
+pandas==2.1.4
+scikit-learn==1.4.0
+cryptography==42.0.2
+gunicorn==21.2.0
