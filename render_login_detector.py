@@ -1,9 +1,42 @@
 from flask import Flask, jsonify
 import csv
 import os
+import json
+import base64
+
 from sklearn.ensemble import RandomForestClassifier
 
+# AES LIBRARIES
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
+
 app = Flask(__name__)
+
+# ================= AES CONFIG =================
+# MUST be exactly 32 bytes for AES-256
+AES_KEY = b"12345678901234567890123456789012"
+
+def encrypt_data(data_dict):
+    data_json = json.dumps(data_dict)
+    data_bytes = data_json.encode()
+
+    iv = os.urandom(16)
+
+    padder = padding.PKCS7(128).padder()
+    padded_data = padder.update(data_bytes) + padder.finalize()
+
+    cipher = Cipher(
+        algorithms.AES(AES_KEY),
+        modes.CBC(iv),
+        backend=default_backend()
+    )
+
+    encryptor = cipher.encryptor()
+    ciphertext = encryptor.update(padded_data) + encryptor.finalize()
+
+    encrypted_message = base64.b64encode(iv + ciphertext).decode()
+    return encrypted_message
 
 # ================= LOAD CSV =================
 def load_data():
@@ -14,7 +47,6 @@ def load_data():
     with open("login.csv", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            # Feature vector (numeric only)
             features = [
                 float(row["network_packet_size"]),
                 int(row["login_attempts"]),
@@ -57,7 +89,7 @@ def run_random_forest():
     return {
         "cloud": "RENDER",
         "ml_model": "Random Forest (Supervised)",
-        "encryption_in_transit": "SSH (log transfer)",
+        "encryption_in_transit": "AES-256",
         "total_sessions": len(rows),
         "attacks_detected": len(alerts),
         "alerts": alerts
@@ -66,10 +98,15 @@ def run_random_forest():
 # ================= API =================
 @app.route("/result", methods=["GET"])
 def result():
-    return jsonify(run_random_forest())
+    model_output = run_random_forest()
+    encrypted_output = encrypt_data(model_output)
+
+    return jsonify({
+        "encrypted": True,
+        "data": encrypted_output
+    })
 
 # ================= START =================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-    
