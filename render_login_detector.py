@@ -13,18 +13,20 @@ from cryptography.hazmat.backends import default_backend
 
 app = Flask(__name__)
 
-# ================= AES CONFIG =================
-# MUST be exactly 32 bytes for AES-256
+# SAME KEY AS AWS + GCP
 AES_KEY = b"12345678901234567890123456789012"
 
+
+# ================= AES ENCRYPT =================
 def encrypt_data(data_dict):
+
     data_json = json.dumps(data_dict)
     data_bytes = data_json.encode()
 
     iv = os.urandom(16)
 
     padder = padding.PKCS7(128).padder()
-    padded_data = padder.update(data_bytes) + padder.finalize()
+    padded = padder.update(data_bytes) + padder.finalize()
 
     cipher = Cipher(
         algorithms.AES(AES_KEY),
@@ -33,37 +35,49 @@ def encrypt_data(data_dict):
     )
 
     encryptor = cipher.encryptor()
-    ciphertext = encryptor.update(padded_data) + encryptor.finalize()
+    ciphertext = encryptor.update(padded) + encryptor.finalize()
 
-    encrypted_message = base64.b64encode(iv + ciphertext).decode()
-    return encrypted_message
+    return base64.b64encode(iv + ciphertext).decode()
+
 
 # ================= LOAD CSV =================
 def load_data():
+
     X = []
     y = []
     raw_rows = []
 
     with open("login.csv", newline="") as f:
         reader = csv.DictReader(f)
+
         for row in reader:
-            features = [
-                float(row["network_packet_size"]),
-                int(row["login_attempts"]),
-                float(row["session_duration"]),
-                float(row["ip_reputation_score"]),
-                int(row["failed_logins"]),
-                int(row["unusual_time_access"])
-            ]
+
+            # ---------- SAFE NUMERIC FEATURES ----------
+            try:
+                features = [
+                    float(row.get("network_packet_size", 0) or 0),
+                    int(row.get("login_attempts", 0) or 0),
+                    float(row.get("session_duration", 0) or 0),
+                    float(row.get("ip_reputation_score", 0) or 0),
+                    int(row.get("failed_logins", 0) or 0),
+                    int(row.get("unusual_time_access", 0) or 0)
+                ]
+            except:
+                features = [0, 0, 0, 0, 0, 0]
 
             X.append(features)
-            y.append(int(row["attack_detected"]))
+
+            # Safe label handling
+            y.append(int(row.get("attack_detected", 0) or 0))
+
             raw_rows.append(row)
 
     return X, y, raw_rows
 
-# ================= RANDOM FOREST MODEL =================
+
+# ================= RANDOM FOREST =================
 def run_random_forest():
+
     X, y, rows = load_data()
 
     model = RandomForestClassifier(
@@ -77,27 +91,61 @@ def run_random_forest():
     alerts = []
 
     for i, pred in enumerate(predictions):
+
         if pred == 1:
+
+            row = rows[i]
+
+            # ---------------- STANDARDIZED FIELDS ----------------
+
+            # ACCOUNT ID
+            if "account_id" in row:
+                account_id = str(row.get("account_id", "") or "")
+            else:
+                account_id = str(row.get("session_id", "") or "")
+
+            # TRANSACTION AMOUNT
+            if "transaction_amount" in row:
+                try:
+                    transaction_amount = float(row.get("transaction_amount", 0) or 0)
+                except:
+                    transaction_amount = 0
+            else:
+                transaction_amount = 0  # Render normally has no money
+
+            # IP ADDRESS
+            if "ip_address" in row:
+                ip_address = str(row.get("ip_address", "") or "")
+            else:
+                ip_address = ""
+
             alerts.append({
-                "session_id": rows[i]["session_id"],
-                "browser": rows[i]["browser_type"],
-                "protocol": rows[i]["protocol_type"],
+                "cloud": "RENDER",
+                "account_id": account_id,
+                "ip_address": ip_address,
+                "transaction_amount": transaction_amount,
+                "browser": row.get("browser_type", "Unknown"),
+                "protocol": row.get("protocol_type", "Unknown"),
                 "reason": "Random Forest classified session as attack",
                 "recommended_action": "block session and raise alert"
             })
 
+    risk_score = round(len(alerts) / len(rows), 3) if len(rows) > 0 else 0
+
     return {
         "cloud": "RENDER",
-        "ml_model": "Random Forest (Supervised)",
-        "encryption_in_transit": "AES-256",
-        "total_sessions": len(rows),
-        "attacks_detected": len(alerts),
-        "alerts": alerts
+        "risk_score": risk_score,
+        "severity": "HIGH" if risk_score > 0.2 else "MEDIUM" if risk_score > 0.1 else "LOW",
+        "alert": risk_score > 0.2,
+        "anomaly_count": len(alerts),
+        "anomalies": alerts
     }
+
 
 # ================= API =================
 @app.route("/result", methods=["GET"])
 def result():
+
     model_output = run_random_forest()
     encrypted_output = encrypt_data(model_output)
 
@@ -105,6 +153,7 @@ def result():
         "encrypted": True,
         "data": encrypted_output
     })
+
 
 # ================= START =================
 if __name__ == "__main__":
